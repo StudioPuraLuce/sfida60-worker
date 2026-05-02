@@ -1,7 +1,6 @@
 name = "sfida60-motivatore"
 main = "worker.js"
 compatibility_date = "2025-05-02"
-compatibility_flags = ["nodejs_compat"]
 
 [triggers]
 crons = ["0 4 * * *", "0 19 * * *"]

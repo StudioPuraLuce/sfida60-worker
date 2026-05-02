@@ -1,13 +1,6 @@
 // ─── Sfida 60 Giorni — Motivatore Worker ─────────────────────────────────────
-// Cloudflare Worker con:
-// - Cron 06:00 e 21:00 (Europe/Rome)
-// - KV read/write per dati sfida
-// - Claude API per messaggi personalizzati
-// - Telegram per delivery
-// - Endpoint REST per sync da app
+// Cloudflare Worker · Gemini Flash · Telegram · KV sync
 
-const TELEGRAM_TOKEN = "8608660431:AAHoHGyyMYQmJh_EOmh5-BCgW9-HG44uhmw";
-const CHAT_ID = "5283084625";
 const START_DATE = new Date("2025-05-02T00:00:00Z");
 const TOTAL_DAYS = 60;
 
@@ -34,11 +27,8 @@ const SCHEDULE = [
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getDayIndex() {
-  const now = new Date();
-  const s = new Date(START_DATE);
-  s.setHours(0,0,0,0);
-  const d = new Date(now);
-  d.setHours(0,0,0,0);
+  const d = new Date(); d.setHours(0,0,0,0);
+  const s = new Date(START_DATE); s.setHours(0,0,0,0);
   return Math.floor((d - s) / 86400000);
 }
 
@@ -50,195 +40,155 @@ function formatDay(idx) {
 
 function pctOf(dayData) {
   if (!dayData?.items) return 0;
-  const done = SCHEDULE.filter(s => dayData.items[s.id]).length;
-  return Math.round(done / SCHEDULE.length * 100);
+  return Math.round(SCHEDULE.filter(s => dayData.items[s.id]).length / SCHEDULE.length * 100);
 }
 
 function totalDone(allData) {
-  let count = 0;
-  for (let i = 0; i < TOTAL_DAYS; i++) {
-    if (pctOf(allData[`day_${i}`]) === 100) count++;
-  }
-  return count;
+  let n = 0;
+  for (let i = 0; i < TOTAL_DAYS; i++) if (pctOf(allData[`day_${i}`]) === 100) n++;
+  return n;
+}
+
+// ─── Gemini ───────────────────────────────────────────────────────────────────
+
+async function askGemini(apiKey, systemPrompt, userPrompt) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        generationConfig: { maxOutputTokens: 400, temperature: 0.85 },
+      }),
+    }
+  );
+  const d = await res.json();
+  return d.candidates?.[0]?.content?.parts?.[0]?.text || "…";
 }
 
 // ─── Telegram ─────────────────────────────────────────────────────────────────
 
-async function sendTelegram(text) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+async function sendTelegram(token, chatId, text) {
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: CHAT_ID,
-      text,
-      parse_mode: "Markdown",
-    }),
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
   });
 }
 
-// ─── Claude ──────────────────────────────────────────────────────────────────
+// ─── Morning ──────────────────────────────────────────────────────────────────
 
-async function askClaude(env, prompt, system) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
-      system,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-  const d = await res.json();
-  return d.content?.[0]?.text || "";
-}
-
-// ─── Morning message ──────────────────────────────────────────────────────────
-
-async function sendMorningMessage(env) {
+async function sendMorning(env) {
   const idx = getDayIndex();
   if (idx < 0 || idx >= TOTAL_DAYS) return;
 
   const raw = await env.KV.get("sfida60_data");
-  const allData = raw ? JSON.parse(raw) : {};
-  const done = totalDone(allData);
-  const yesterday = allData[`day_${idx - 1}`];
-  const yesterdayPct = idx > 0 ? pctOf(yesterday) : null;
+  const all = raw ? JSON.parse(raw) : {};
+  const yesterdayPct = idx > 0 ? pctOf(all[`day_${idx-1}`]) : null;
+  const done = totalDone(all);
 
   const system = `Sei il Coach della Sfida 60 Giorni di Chris — Decompressione Cervello.
-Tono: diretto, monastico, asciutto. Zero banalità. Max 120 parole.
-Schema: Boot 06:00 (flessioni, preghiere, caffè, corda, addominali, ballo), Messa 07:30, Lavoro 09-14, Attività pomeriggio, No screen dopo cena, Compieta, Letto 21:30.
-Contesto: Fourth Way, cattolicesimo esicasta, presenza, lavoro su sé.
-Formato Telegram: usa *grassetto* per parole chiave, niente liste lunghe.`;
+Tono: diretto, monastico, asciutto. Zero banalità motivazionali da palestra.
+Max 120 parole. Formato Telegram: usa *grassetto* per parole chiave.
+Contesto spirituale: Fourth Way, cattolicesimo, presenza, lavoro su sé.
+Schema giornata: Boot 06:00 (flessioni, preghiere, caffè, corda, addominali, ballo), Messa 07:30, Lavoro 09-14, Attività pomeriggio, No screen dopo cena, Compieta, Letto 21:30.`;
 
   const prompt = `Messaggio di BUONGIORNO per Chris.
-Giorno: ${idx + 1}/60 — ${formatDay(idx)}
-Giorni completi finora: ${done}/${idx}
-${yesterdayPct !== null ? `Ieri: ${yesterdayPct}% completato` : "Primo giorno della sfida"}
-Scrivi un messaggio motivazionale breve per iniziare la giornata. Fa' riferimento allo schema del Boot e alla Messa. Termina con una domanda o sfida concreta per oggi.`;
+Giorno: ${idx+1}/60 — ${formatDay(idx)}
+Giorni completi finora: ${done}/${Math.max(idx,1)}
+${yesterdayPct !== null ? `Ieri: ${yesterdayPct}% completato` : "Primo giorno della sfida."}
+Scrivi un messaggio breve per iniziare. Fa' riferimento al Boot e alla Messa. Chiudi con una sfida concreta per oggi.`;
 
-  const msg = await askClaude(env, prompt, system);
-  await sendTelegram(`*✦ Giorno ${idx + 1}/60 — Buongiorno*\n\n${msg}`);
+  const msg = await askGemini(env.GEMINI_API_KEY, system, prompt);
+  await sendTelegram(env.TELEGRAM_TOKEN, env.CHAT_ID, `*✦ Giorno ${idx+1}/60 — Buongiorno, Chris*\n\n${msg}`);
 }
 
-// ─── Evening message ──────────────────────────────────────────────────────────
+// ─── Evening ──────────────────────────────────────────────────────────────────
 
-async function sendEveningMessage(env) {
+async function sendEvening(env) {
   const idx = getDayIndex();
   if (idx < 0 || idx >= TOTAL_DAYS) return;
 
   const raw = await env.KV.get("sfida60_data");
-  const allData = raw ? JSON.parse(raw) : {};
-  const dayData = allData[`day_${idx}`] || {};
+  const all = raw ? JSON.parse(raw) : {};
+  const dayData = all[`day_${idx}`] || {};
   const pct = pctOf(dayData);
-  const done = totalDone(allData);
-
-  const completedItems = SCHEDULE.filter(s => dayData.items?.[s.id]).map(s => s.label);
-  const missedItems = SCHEDULE.filter(s => !dayData.items?.[s.id]).map(s => s.label);
+  const done = totalDone(all);
+  const completed = SCHEDULE.filter(s => dayData.items?.[s.id]).map(s => s.label);
+  const missed = SCHEDULE.filter(s => !dayData.items?.[s.id]).map(s => s.label);
 
   const system = `Sei il Coach della Sfida 60 Giorni di Chris.
-Tono: onesto, diretto, a volte duro. Come un abate che fa l'esame di coscienza con un monaco.
+Tono: onesto, diretto, a volte duro. Come un abate che fa l'esame di coscienza.
 Max 130 parole. Formato Telegram con *grassetto*.
-Non lodare eccessivamente. Se il giorno è stato scarso, dillo chiaramente.`;
+Non lodare se il giorno è stato mediocre. Di' la verità.`;
 
-  const prompt = `Messaggio di BUONASERA / esame di coscienza per Chris.
-Giorno ${idx + 1}/60 — ${formatDay(idx)}
+  const prompt = `Esame di coscienza serale per Chris.
+Giorno ${idx+1}/60 — ${formatDay(idx)}
 Completamento: ${pct}%
-Completati: ${completedItems.join(", ") || "nessuno"}
-Mancanti: ${missedItems.join(", ") || "nessuno"}
+Completati: ${completed.join(", ") || "nessuno"}
+Mancanti: ${missed.join(", ") || "nessuno"}
 Attività pomeriggio: ${dayData.activity || "non registrata"}
 Note: ${dayData.note || "nessuna"}
 Giorni completi totali: ${done}
+Chiudi con un'intenzione concreta per domani mattina.`;
 
-Fai un esame di coscienza breve e onesto. Chiudi con un'intenzione concreta per domani mattina.`;
-
-  const msg = await askClaude(env, prompt, system);
-  await sendTelegram(`*✦ Giorno ${idx + 1} — Esame di Coscienza*\n\n${msg}`);
+  const msg = await askGemini(env.GEMINI_API_KEY, system, prompt);
+  await sendTelegram(env.TELEGRAM_TOKEN, env.CHAT_ID, `*✦ Giorno ${idx+1} — Esame di Coscienza*\n\n${msg}`);
 }
 
-// ─── HTTP Handler (sync da app) ───────────────────────────────────────────────
+// ─── HTTP ─────────────────────────────────────────────────────────────────────
 
 async function handleRequest(request, env) {
   const url = new URL(request.url);
-  const origin = request.headers.get("Origin") || "*";
-
-  const corsHeaders = {
+  const cors = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
-  // POST /sync — app salva dati su KV
   if (request.method === "POST" && url.pathname === "/sync") {
     const body = await request.json();
     await env.KV.put("sfida60_data", JSON.stringify(body));
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...cors, "Content-Type": "application/json" } });
   }
 
-  // GET /data — app legge dati da KV
   if (request.method === "GET" && url.pathname === "/data") {
     const raw = await env.KV.get("sfida60_data");
-    return new Response(raw || "{}", {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(raw || "{}", { headers: { ...cors, "Content-Type": "application/json" } });
   }
 
-  // GET /ping — test
   if (url.pathname === "/ping") {
-    return new Response(JSON.stringify({ ok: true, day: getDayIndex() + 1 }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ ok: true, day: getDayIndex()+1, total: TOTAL_DAYS }), {
+      headers: { ...cors, "Content-Type": "application/json" }
     });
   }
 
-  // POST /test-morning — trigger manuale
   if (request.method === "POST" && url.pathname === "/test-morning") {
-    await sendMorningMessage(env);
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    await sendMorning(env);
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...cors, "Content-Type": "application/json" } });
   }
 
-  // POST /test-evening
   if (request.method === "POST" && url.pathname === "/test-evening") {
-    await sendEveningMessage(env);
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    await sendEvening(env);
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...cors, "Content-Type": "application/json" } });
   }
 
-  return new Response("Sfida 60 — Worker attivo", { headers: corsHeaders });
+  return new Response("✦ Sfida60 Worker attivo", { headers: cors });
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+// ─── Entry ────────────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     return handleRequest(request, env);
   },
 
-  async scheduled(event, env, ctx) {
-    const hour = new Date().toLocaleString("it-IT", {
-      timeZone: "Europe/Rome",
-      hour: "2-digit",
-      hour12: false,
-    });
-
-    if (event.cron === "0 4 * * *") {
-      // 06:00 Rome = 04:00 UTC
-      await sendMorningMessage(env);
-    } else if (event.cron === "0 19 * * *") {
-      // 21:00 Rome = 19:00 UTC
-      await sendEveningMessage(env);
-    }
+  async scheduled(event, env) {
+    if (event.cron === "0 4 * * *") await sendMorning(env);
+    if (event.cron === "0 19 * * *") await sendEvening(env);
   },
 };
