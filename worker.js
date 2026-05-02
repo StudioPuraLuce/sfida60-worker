@@ -652,6 +652,56 @@ async function handleRequest(request, env) {
     return json(await res.json());
   }
 
+
+  // OAuth callback — exchanges code for tokens and saves to KV
+  if (path === "/oauth/callback" && request.method === "GET") {
+    const code = url.searchParams.get("code");
+    if (!code) return new Response("Missing code", { status: 400 });
+
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: env.GOOGLE_CLIENT_ID,
+        client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: "https://sfida60-motivatore.soliwkr.workers.dev/oauth/callback",
+        grant_type: "authorization_code",
+      }),
+    });
+
+    const tokens = await res.json();
+    if (!tokens.access_token) {
+      return new Response(`Errore: ${JSON.stringify(tokens)}`, { status: 400 });
+    }
+
+    await env.KV.put("google_oauth_token", JSON.stringify({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: Date.now() + (tokens.expires_in * 1000),
+    }));
+
+    // Confirm on Telegram
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: "5283084625",
+        text: "✅ *Google Workspace connesso.*\nCalendar, Sheets e Gmail ora attivi per Marco.",
+        parse_mode: "Markdown",
+      }),
+    });
+
+    return new Response(`
+      <html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#080807;color:#D4A84B">
+        <h1>✦ Google connesso</h1>
+        <p style="color:#E8E0D0">Marco ha accesso a Calendar, Sheets e Gmail.</p>
+        <p style="color:#6A6050">Puoi chiudere questa finestra.</p>
+      </body></html>
+    `, { headers: { "Content-Type": "text/html" } });
+  }
+
+
   if (path === "/setup-google" && request.method === "POST") {
     await env.KV.put("google_oauth_token", JSON.stringify(await request.json()));
     return json({ ok: true });
