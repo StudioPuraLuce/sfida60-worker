@@ -1,9 +1,9 @@
 name = "sfida60-motivatore"
 main = "worker.js"
-compatibility_date = "2025-05-02"
+compatibility_date = "2026-05-04"
 
 [triggers]
-crons = ["0 4 * * *", "0 19 * * *"]
+crons = ["5 4 * * *", "5 19 * * *"]
 
 [[kv_namespaces]]
 binding = "KV"
