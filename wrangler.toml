@@ -1,0 +1,14 @@
+name = "sfida60-motivatore"
+main = "worker.js"
+compatibility_date = "2025-05-02"
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+crons = ["0 4 * * *", "0 19 * * *"]
+
+[[kv_namespaces]]
+binding = "KV"
+id = "cc03849214564c358b59c7536ecaf9f9"
+
+[vars]
+CHAT_ID = "5283084625"
