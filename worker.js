@@ -1,7 +1,7 @@
 // ─── Sfida 60 Giorni — Motivatore Worker ─────────────────────────────────────
 // Cloudflare Worker · Gemini Flash · Telegram · KV sync
 
-const START_DATE = new Date("2025-05-02T00:00:00Z");
+const START_DATE = new Date("2026-05-04T00:00:00Z");
 const TOTAL_DAYS = 60;
 
 const SCHEDULE = [
