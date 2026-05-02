@@ -144,42 +144,71 @@ async function getGoogleToken(env) {
   }
 
   const raw = await env.KV.get("google_service_account");
-  if (!raw) return null;
+  if (!raw) { console.error("No service account in KV"); return null; }
   const sa = JSON.parse(raw);
 
-  const scopes = [
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.send",
-  ];
-
   const now = Math.floor(Date.now() / 1000);
-  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" })).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-  const payload = btoa(JSON.stringify({
-    iss: sa.client_email, scope: scopes.join(" "),
+
+  // Build JWT header + payload
+  const enc = (obj) => btoa(JSON.stringify(obj))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  const header  = enc({ alg: "RS256", typ: "JWT" });
+  const payload = enc({
+    iss: sa.client_email,
+    sub: "me@soliwkr.pro",
+    scope: [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/gmail.compose",
+      "https://www.googleapis.com/auth/gmail.send",
+    ].join(" "),
     aud: "https://oauth2.googleapis.com/token",
-    exp: now + 3600, iat: now,
-  })).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+    exp: now + 3600,
+    iat: now,
+  });
 
   const sigInput = `${header}.${payload}`;
-  const pemBody = sa.private_key.split("\\n").filter(l => l && !l.includes("-----")).join("");
-  const keyData = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+
+  // Parse PEM private key
+  const pemLines = sa.private_key.split("\n").filter(l => l && !l.startsWith("---"));
+  const pemBody  = pemLines.join("");
+  const keyBytes = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+
   const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8", keyData.buffer,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]
+    "pkcs8",
+    keyBytes.buffer,
+    { name: "RSASSA-PKCS1-v1_5", hash: { name: "SHA-256" } },
+    false,
+    ["sign"]
   );
-  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", cryptoKey, new TextEncoder().encode(sigInput));
-  const sig64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+
+  const sigBytes = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    cryptoKey,
+    new TextEncoder().encode(sigInput)
+  );
+
+  const sig64 = btoa(String.fromCharCode(...new Uint8Array(sigBytes)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
   const jwt = `${sigInput}.${sig64}`;
 
+  // Exchange JWT for access token
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
   });
+
   const data = await res.json();
-  if (!data.access_token) return null;
+  if (!data.access_token) {
+    console.error("SA token error:", JSON.stringify(data));
+    return null;
+  }
 
   await env.KV.put("google_sa_token", JSON.stringify({
     access_token: data.access_token,
@@ -669,6 +698,18 @@ async function handleRequest(request, env) {
   if (path === "/ping") return json({ ok: true, day: getDayIndex()+1, total: TOTAL_DAYS });
   if (path === "/data") return new Response(await env.KV.get("sfida60_data") || "{}", { headers: { ...CORS, "Content-Type": "application/json" } });
   if (path === "/sync" && request.method === "POST") { await env.KV.put("sfida60_data", JSON.stringify(await request.json())); return json({ ok: true }); }
+  if (path === "/test" && request.method === "POST") {
+    const idx = 0;
+    const all = await getData(env);
+    const events = await getCalendarEvents(env, dateISO(idx));
+    const calSummary = events.length ? events.map(e => `${e.start} ${e.title}`).join(" · ") : "agenda libera";
+    const ctx = `TEST Giorno 1/60 — ${formatDay(idx, true)}\nCalendario: ${calSummary}`;
+    const msg = await askGemini(env.GEMINI_API_KEY, marcoSystem(ctx),
+      `TEST sistema. Presentati come Marco e fai la prima domanda mattutina. Max 80 parole.`, 250);
+    await tg(env.TELEGRAM_TOKEN, `*🧪 TEST Marco*\n\n${msg}\n\n_Calendario: ${calSummary}_`);
+    await setState(env, { step: "morning_q1", lastDay: idx, context: { calSummary, yesterdayPct: null } });
+    return json({ ok: true, calendar_events: events.length, cal: calSummary });
+  }
   if (path === "/test-morning" && request.method === "POST") { await startMorning(env); return json({ ok: true }); }
   if (path === "/test-evening" && request.method === "POST") { await startEvening(env); return json({ ok: true }); }
 
