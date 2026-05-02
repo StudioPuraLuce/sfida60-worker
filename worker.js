@@ -136,29 +136,57 @@ async function tg(token, text, extra = {}) {
 // ═══════════════════════════════════════════════════════════════════════
 
 async function getGoogleToken(env) {
-  const raw = await env.KV.get("google_oauth_token");
+  // Check cached token
+  const cached = await env.KV.get("google_sa_token");
+  if (cached) {
+    const t = JSON.parse(cached);
+    if (Date.now() < t.expires_at - 60000) return t.access_token;
+  }
+
+  const raw = await env.KV.get("google_service_account");
   if (!raw) return null;
-  const token = JSON.parse(raw);
-  if (token.expires_at && Date.now() < token.expires_at - 60000) return token.access_token;
-  if (!token.refresh_token || !env.GOOGLE_CLIENT_ID) return token.access_token || null;
+  const sa = JSON.parse(raw);
+
+  const scopes = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+  ];
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" })).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  const payload = btoa(JSON.stringify({
+    iss: sa.client_email, scope: scopes.join(" "),
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600, iat: now,
+  })).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+
+  const sigInput = `${header}.${payload}`;
+  const pemBody = sa.private_key.split("\\n").filter(l => l && !l.includes("-----")).join("");
+  const keyData = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+  const cryptoKey = await crypto.subtle.importKey(
+    "pkcs8", keyData.buffer,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", cryptoKey, new TextEncoder().encode(sigInput));
+  const sig64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  const jwt = `${sigInput}.${sig64}`;
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.GOOGLE_CLIENT_ID,
-      client_secret: env.GOOGLE_CLIENT_SECRET,
-      refresh_token: token.refresh_token,
-      grant_type: "refresh_token",
-    }),
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: jwt }),
   });
-  const newToken = await res.json();
-  if (newToken.access_token) {
-    const updated = { ...token, access_token: newToken.access_token, expires_at: Date.now() + newToken.expires_in * 1000 };
-    await env.KV.put("google_oauth_token", JSON.stringify(updated));
-    return updated.access_token;
-  }
-  return null;
+  const data = await res.json();
+  if (!data.access_token) return null;
+
+  await env.KV.put("google_sa_token", JSON.stringify({
+    access_token: data.access_token,
+    expires_at: Date.now() + data.expires_in * 1000,
+  }), { expirationTtl: 3500 });
+
+  return data.access_token;
 }
 
 async function getCalendarEvents(env, dateStr) {
