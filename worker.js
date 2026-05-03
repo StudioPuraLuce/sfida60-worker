@@ -3,7 +3,12 @@
 // Inline Keyboards · Google Docs Log · Formattazione magistrale
 // ═══════════════════════════════════════════════════════════════════════
 
-const START_DATE   = new Date("2026-05-04T00:00:00Z");
+let START_DATE = new Date("2026-05-04T00:00:00Z");
+
+async function loadStartDate(env) {
+  const saved = await env.KV.get("sfida60_start_date");
+  if (saved) START_DATE = new Date(saved + "T00:00:00Z");
+}
 const TOTAL_DAYS   = 60;
 const CHAT_ID      = "5283084625";
 const MINI_APP_URL = "https://sfida60.pages.dev";
@@ -170,6 +175,7 @@ async function setBotCommands(token) {
     {command:"stato",    description:"📊 Dashboard performance e trend settimanale"},
     {command:"report",   description:"📋 Report settimanale → Telegram + Gmail"},
     {command:"silenzio", description:"🔇 Pausa notifiche — es. /silenzio 2"},
+    {command:"setstart", description:"📆 Imposta data inizio — es. /setstart 2026-05-04"},
     {command:"aiuto",    description:"❓ Guida completa ai comandi"},
   ]});
 }
@@ -833,6 +839,7 @@ async function handleFreeText(env, text, idx) {
 
 async function processUpdate(body, env) {
   try {
+    await loadStartDate(env);
     if(body.callback_query){
       const silence=await env.KV.get("sfida60_silence_until");
       if(silence&&Date.now()<parseInt(silence)){ await answerCb(env.TELEGRAM_TOKEN,body.callback_query.id); return; }
@@ -893,6 +900,7 @@ const CORS={
 const json=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{...CORS,"Content-Type":"application/json"}});
 
 async function handleRequest(request, env, ctx) {
+  await loadStartDate(env);
   const url=new URL(request.url), path=url.pathname;
   if(request.method==="OPTIONS") return new Response(null,{headers:CORS});
   if(path==="/webhook"&&request.method==="POST") return handleWebhook(request,env,ctx);
