@@ -376,7 +376,9 @@ async function getGoogleToken(env, extraScope="") {
     const header  = enc({alg:"RS256",typ:"JWT"});
     const payload = enc({iss:sa.client_email, sub:"me@soliwkr.pro", scope:scopes.join(" "), aud:"https://oauth2.googleapis.com/token", exp:now+3600, iat:now});
     const sigInput = `${header}.${payload}`;
-    const pemLines = sa.private_key.split("\\n").filter(l=>l&&!l.startsWith("---"));
+    // Handle both formats: actual \n chars (from JSON.parse) and literal \\n escapes
+    const pemRaw = sa.private_key.replace(/\\n/g, "\n");
+    const pemLines = pemRaw.split("\n").filter(l=>l&&!l.startsWith("---"));
     const keyBytes = Uint8Array.from(atob(pemLines.join("")),c=>c.charCodeAt(0));
     const cryptoKey = await crypto.subtle.importKey("pkcs8",keyBytes.buffer,{name:"RSASSA-PKCS1-v1_5",hash:{name:"SHA-256"}},false,["sign"]);
     const sigBytes = await crypto.subtle.sign("RSASSA-PKCS1-v1_5",cryptoKey,new TextEncoder().encode(sigInput));
@@ -1733,6 +1735,40 @@ async function handleRequest(request, env, ctx) {
     const idx=Math.max(0,getDayIndex()); const all=await kv.getData(env);
     const link = await generateWeeklyPDF(env, idx, all);
     return json({ok:true, link});
+  }
+  if(path==="/diag"&&request.method==="POST"){
+    const diag = {};
+    try {
+      const raw = await env.KV.get("google_service_account");
+      diag.kv = raw ? "OK" : "MISSING";
+      if (!raw) return json(diag);
+      const sa = JSON.parse(raw);
+      diag.client_email = sa.client_email;
+      const token = await getGoogleToken(env);
+      diag.token = token ? "OK" : "FAIL";
+      if (token) {
+        const driveR = await fetch("https://www.googleapis.com/drive/v3/about?fields=user", {headers:{Authorization:`Bearer ${token}`}});
+        diag.drive_status = driveR.status;
+        const docR = await fetch("https://docs.googleapis.com/v1/documents",{
+          method:"POST",
+          headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},
+          body:JSON.stringify({title:"Sfida60_diag_test"})
+        });
+        diag.docs_status = docR.status;
+        const docBody = await docR.json();
+        if (docBody.documentId) {
+          const pdfR = await fetch(`https://www.googleapis.com/drive/v3/files/${docBody.documentId}/export?mimeType=application/pdf`,{
+            headers:{Authorization:`Bearer ${token}`}
+          });
+          diag.pdf_export_status = pdfR.status;
+          diag.pdf_size = (await pdfR.arrayBuffer()).byteLength;
+          await fetch(`https://www.googleapis.com/drive/v3/files/${docBody.documentId}`,{
+            method:"DELETE", headers:{Authorization:`Bearer ${token}`}
+          });
+        }
+      }
+    } catch(e) { diag.error = e.message; }
+    return json(diag);
   }
   if(path==="/test-deviation"&&request.method==="POST"){
     await checkDeviationAlarm(env);
