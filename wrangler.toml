@@ -3,7 +3,7 @@ main = "worker.js"
 compatibility_date = "2025-05-04"
 
 [triggers]
-crons = ["5 4 * * *", "5 19 * * *"]
+crons = ["5 4 * * *", "5 19 * * *", "0 6 * * *"]
 
 [[kv_namespaces]]
 binding = "KV"
