@@ -239,6 +239,7 @@ const kb = {
 // ═══════════════════════════════════════════════════════════════════════
 
 async function getGoogleToken(env, extraScope="") {
+  try {
   const cacheKey = extraScope ? "google_sa_token_docs" : "google_sa_token";
   const cached = await env.KV.get(cacheKey);
   if(cached){ const t=JSON.parse(cached); if(Date.now()<t.expires_at-60000) return t.access_token; }
@@ -272,6 +273,7 @@ async function getGoogleToken(env, extraScope="") {
   if(!data.access_token){ console.error("SA token error:",JSON.stringify(data)); return null; }
   await env.KV.put(cacheKey,JSON.stringify({access_token:data.access_token,expires_at:Date.now()+data.expires_in*1000}),{expirationTtl:3500});
   return data.access_token;
+  } catch(e) { console.error("getGoogleToken failed:", e.message); return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -279,18 +281,27 @@ async function getGoogleToken(env, extraScope="") {
 // ═══════════════════════════════════════════════════════════════════════
 
 async function getCalendarEvents(env, dateStr) {
-  const token = await getGoogleToken(env);
-  if(!token) return [];
-  const tMin = encodeURIComponent(`${dateStr}T00:00:00+02:00`);
-  const tMax = encodeURIComponent(`${dateStr}T23:59:59+02:00`);
-  const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${tMin}&timeMax=${tMax}&singleEvents=true&orderBy=startTime`,{headers:{Authorization:`Bearer ${token}`}});
-  const d = await r.json();
-  return (d.items||[]).map(e=>({title:e.summary||"—",start:e.start?.dateTime?.split("T")[1]?.slice(0,5)||e.start?.date||""}));
+  try {
+    const token = await getGoogleToken(env);
+    if(!token) return [];
+    const tMin = encodeURIComponent(`${dateStr}T00:00:00+02:00`);
+    const tMax = encodeURIComponent(`${dateStr}T23:59:59+02:00`);
+    const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${tMin}&timeMax=${tMax}&singleEvents=true&orderBy=startTime`,{headers:{Authorization:`Bearer ${token}`}});
+    if(!r.ok) { console.error("Calendar error:", r.status, await r.text()); return []; }
+    const d = await r.json();
+    return (d.items||[]).map(e=>({title:e.summary||"—",start:e.start?.dateTime?.split("T")[1]?.slice(0,5)||e.start?.date||""}));
+  } catch(e) {
+    console.error("getCalendarEvents failed:", e.message);
+    return [];
+  }
 }
 
 async function createCalendarEvent(env,{title,date,startTime,endTime,description=""}) {
-  const token = await getGoogleToken(env); if(!token) return null;
-  await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events",{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({summary:title,description,start:{dateTime:`${date}T${startTime}:00`,timeZone:"Europe/Rome"},end:{dateTime:`${date}T${endTime}:00`,timeZone:"Europe/Rome"}})});
+  try {
+    const token = await getGoogleToken(env); if(!token) return null;
+    const r = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events",{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify({summary:title,description,start:{dateTime:`${date}T${startTime}:00`,timeZone:"Europe/Rome"},end:{dateTime:`${date}T${endTime}:00`,timeZone:"Europe/Rome"}})});
+    if(!r.ok) console.error("createCalendarEvent error:", r.status);
+  } catch(e) { console.error("createCalendarEvent failed:", e.message); }
 }
 
 async function appendToSheet(env,values) {
@@ -853,11 +864,10 @@ async function processUpdate(body, env) {
 
     await handleFreeText(env,text,idx);
   } catch(e) {
-    console.error("processUpdate error:", e.message);
-    // Send error notification silently
+    console.error("processUpdate error:", e.message, e.stack);
     await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`,{
       method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({chat_id:CHAT_ID, text:`_Errore interno. Riprova._`, parse_mode:"Markdown"})
+      body:JSON.stringify({chat_id:CHAT_ID, text:`_[${e.message?.slice(0,80)||"errore"}]_`, parse_mode:"Markdown"})
     }).catch(()=>{});
   }
 }
