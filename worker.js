@@ -820,40 +820,55 @@ async function handleFreeText(env, text, idx) {
 // WEBHOOK
 // ═══════════════════════════════════════════════════════════════════════
 
-async function handleWebhook(request, env) {
+async function processUpdate(body, env) {
+  try {
+    if(body.callback_query){
+      const silence=await env.KV.get("sfida60_silence_until");
+      if(silence&&Date.now()<parseInt(silence)){ await answerCb(env.TELEGRAM_TOKEN,body.callback_query.id); return; }
+      await handleCallback(env,body.callback_query);
+      return;
+    }
+
+    const msg=body?.message; if(!msg?.text) return;
+    const silence=await env.KV.get("sfida60_silence_until");
+    if(silence&&Date.now()<parseInt(silence)) return;
+
+    const text=msg.text.trim();
+    const realIdx=getDayIndex();
+    const idx=Math.max(0,realIdx);
+    const state=await kv.getState(env);
+
+    const flowSteps=["morning_q1","morning_q2","morning_q3","evening_q1","evening_q2","evening_q3"];
+    if(flowSteps.includes(state.step)&&state.lastDay===realIdx){
+      if(state.step.startsWith("morning")) await handleMorningAnswer(env,state.step,text,realIdx);
+      else await handleEveningAnswer(env,state.step,text,realIdx);
+      return;
+    }
+
+    if(text.startsWith("/")){
+      const parts=text.slice(1).split(" ");
+      await handleCommand(env,parts[0].toLowerCase().split("@")[0],parts.slice(1),idx);
+      return;
+    }
+
+    await handleFreeText(env,text,idx);
+  } catch(e) {
+    console.error("processUpdate error:", e.message);
+    // Send error notification silently
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`,{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({chat_id:CHAT_ID, text:`_Errore interno. Riprova._`, parse_mode:"Markdown"})
+    }).catch(()=>{});
+  }
+}
+
+async function handleWebhook(request, env, ctx) {
   const body = await request.json();
 
-  if(body.callback_query){
-    const silence=await env.KV.get("sfida60_silence_until");
-    if(silence&&Date.now()<parseInt(silence)){ await answerCb(env.TELEGRAM_TOKEN,body.callback_query.id); return new Response("ok"); }
-    await handleCallback(env,body.callback_query);
-    return new Response("ok");
-  }
-
-  const msg=body?.message; if(!msg?.text) return new Response("ok");
-  const silence=await env.KV.get("sfida60_silence_until");
-  if(silence&&Date.now()<parseInt(silence)) return new Response("ok");
-
-  const text=msg.text.trim();
-  const realIdx=getDayIndex();
-  const idx=Math.max(0,realIdx);
-  const state=await kv.getState(env);
-
-  const flowSteps=["morning_q1","morning_q2","morning_q3","evening_q1","evening_q2","evening_q3"];
-  if(flowSteps.includes(state.step)&&state.lastDay===realIdx){
-    if(state.step.startsWith("morning")) await handleMorningAnswer(env,state.step,text,realIdx);
-    else await handleEveningAnswer(env,state.step,text,realIdx);
-    return new Response("ok");
-  }
-
-  if(text.startsWith("/")){
-    const parts=text.slice(1).split(" ");
-    await handleCommand(env,parts[0].toLowerCase().split("@")[0],parts.slice(1),idx);
-    return new Response("ok");
-  }
-
-  await handleFreeText(env,text,idx);
-  return new Response("ok");
+  // Answer Telegram IMMEDIATELY — before any processing
+  // This prevents the 5s timeout that causes "no response" issues
+  ctx.waitUntil(processUpdate(body, env));
+  return new Response("ok", { status: 200 });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -867,10 +882,10 @@ const CORS={
 };
 const json=(d,s=200)=>new Response(JSON.stringify(d),{status:s,headers:{...CORS,"Content-Type":"application/json"}});
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx) {
   const url=new URL(request.url), path=url.pathname;
   if(request.method==="OPTIONS") return new Response(null,{headers:CORS});
-  if(path==="/webhook"&&request.method==="POST") return handleWebhook(request,env);
+  if(path==="/webhook"&&request.method==="POST") return handleWebhook(request,env,ctx);
   if(path==="/ping") return json({ok:true,day:getDayIndex()+1,total:TOTAL_DAYS,doc:DOC_ID});
   if(path==="/data") return new Response(await env.KV.get("sfida60_data")||"{}",{headers:{...CORS,"Content-Type":"application/json"}});
   if(path==="/sync"&&request.method==="POST"){await env.KV.put("sfida60_data",JSON.stringify(await request.json()));return json({ok:true});}
@@ -899,7 +914,7 @@ async function handleRequest(request, env) {
 // ═══════════════════════════════════════════════════════════════════════
 
 export default {
-  async fetch(request,env){return handleRequest(request,env);},
+  async fetch(request,env,ctx){return handleRequest(request,env,ctx);},
   async scheduled(event,env){
     const silence=await env.KV.get("sfida60_silence_until");
     if(silence&&Date.now()<parseInt(silence)) return;
