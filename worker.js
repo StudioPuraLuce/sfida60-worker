@@ -872,9 +872,17 @@ async function postPublicAccountability(env, idx, all) {
 
 async function askGemini(apiKey, system, prompt, maxTokens=400) {
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,{
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,{
       method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({systemInstruction:{parts:[{text:system}]},contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:maxTokens,temperature:0.85}})
+      body:JSON.stringify({
+        systemInstruction:{parts:[{text:system}]},
+        contents:[{role:"user",parts:[{text:prompt}]}],
+        generationConfig:{
+          maxOutputTokens:maxTokens,
+          temperature:0.85,
+          thinkingConfig:{thinkingBudget:0},
+        },
+      })
     });
     const d = await r.json();
     return d.candidates?.[0]?.content?.parts?.[0]?.text?.trim()||"…";
