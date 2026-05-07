@@ -889,13 +889,32 @@ async function askGemini(apiKey, system, prompt, maxTokens=400) {
   } catch(e) { console.error("askGemini failed:", e.message); return "…"; }
 }
 
+// Programma Mercatinosh 11/5–22/5 (lun-ven, 5 ore/giorno)
+const MERCATINOSH_PROGRAM = {
+  "2026-05-11": "Mappare schema Airtable Inventario → campi listing eBay. Output: foglio mappatura completo, nessun codice.",
+  "2026-05-12": "eBay Developer Account: prima call autenticata sandbox, POST oggetto fittizio. Verifica risposta API.",
+  "2026-05-13": "Decidere dove vive lo script (Worker CF o n8n). Trigger manuale. Struttura, zero over-engineering.",
+  "2026-05-14": "Script live produzione: primo oggetto reale pubblicato su eBay.",
+  "2026-05-15": "Batch 5 oggetti reali pubblicati su eBay. Misura: oggetti live, nessun errore.",
+  "2026-05-18": "Batch altri 5 oggetti eBay. Totale target: 10 live.",
+  "2026-05-19": "Meta for Developers: ottieni chiave Marketplace. Prima call autenticata.",
+  "2026-05-20": "Estendi script per Meta Marketplace. Stesso oggetto, secondo portale.",
+  "2026-05-21": "Test e debug su entrambi i portali. Fix errori.",
+  "2026-05-22": "Misurazione settimana 2: oggetti pubblicati, view, messaggi, € incassati. Report 5 righe.",
+};
+
+function getMercatinoshTask(isoDate) {
+  return MERCATINOSH_PROGRAM[isoDate] || null;
+}
+
 function marcoSystem(ctx="") {
   return `Sei Marco, coach personale di Chris — Sfida 60 Giorni Decompressione Cervello.
 Ex McKinsey, PM senior. Diretto, dati-driven, aspettative alte. Zero scuse, zero banalità.
 Conosce Fourth Way, cattolicesimo, Messa, Compieta. Esigente, non crudele.
 Frasi corte. Memoria elefantina. Tu. Italiano.
 Schema: Boot 06:00, Messa 07:30, Lavoro 09-14, Pranzo 15:00, Cena 20:30, No screen, Compieta, Letto 21:30.
-Vulnerabilità note: (1) sindrome sistemista (2) over-engineering (3) dispersione (4) resistenza al ritmo.${ctx?"\n\nCONTESTO:\n"+ctx:""}`;
+Vulnerabilità note: (1) sindrome sistemista (2) over-engineering (3) dispersione (4) resistenza al ritmo.
+Progetto unico attivo: Mercatinosh — pubblicare oggetti usati su eBay e portali. Nient'altro fino al 22/5.${ctx?"\n\nCONTESTO:\n"+ctx:""}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1064,8 +1083,9 @@ async function startMorning(env) {
     // Preghiera del giorno
     const preghiera = await getPreghieraDelGiorno(env, idx);
 
-    const ctx = `G${idx+1}/60 — ${formatDay(idx,true)} — FASE: ${phase.name}\nIeri: ${ypct!==null?ypct+"%":"primo giorno"}\n${lastIntenzione?`Intenzione dichiarata ieri sera: "${lastIntenzione}"`:"Prima sessione."}\nMedia 7gg: ${weekAvg(all,Math.max(0,idx-1))}%\nAgenda: ${calSummary}\nFocus fase: ${phase.focus}`;
-    const msg = await askGemini(env.GEMINI_API_KEY,marcoSystem(ctx),`Briefing mattutino. ${ypct!==null?`Ieri: ${ypct}%.`:""} ${lastIntenzione?`Hai promesso: "${lastIntenzione}". Inizia da lì.`:""} Fase: ${phase.name}. Prima domanda: risultato NON NEGOZIABILE di oggi. Max 90 parole.`,280);
+    const mercTask = getMercatinoshTask(dateISO(idx));
+    const ctx = `G${idx+1}/60 — ${formatDay(idx,true)} — FASE: ${phase.name}\nIeri: ${ypct!==null?ypct+"%":"primo giorno"}\n${lastIntenzione?`Intenzione dichiarata ieri sera: "${lastIntenzione}"`:"Prima sessione."}\nMedia 7gg: ${weekAvg(all,Math.max(0,idx-1))}%\nAgenda: ${calSummary}\nFocus fase: ${phase.focus}${mercTask?`\nTask Mercatinosh oggi: ${mercTask}`:""}`;
+    const msg = await askGemini(env.GEMINI_API_KEY,marcoSystem(ctx),`Briefing mattutino. ${ypct!==null?`Ieri: ${ypct}%.`:""} ${lastIntenzione?`Hai promesso: "${lastIntenzione}". Inizia da lì.`:""} Fase: ${phase.name}.${mercTask?` Task lavoro: "${mercTask.split(".")[0]}". Cita il task nella prima domanda.`:""} Risultato NON NEGOZIABILE di oggi. Max 90 parole.`,300);
 
     const morningMsg = [
       `☀️ *Buongiorno — Giorno ${idx+1}/60*`,
@@ -1079,10 +1099,15 @@ async function startMorning(env) {
       morningMsg.push(``, `🙏 *Lettura del giorno:*`, `_${preghiera}_`);
     }
 
+    // Task Mercatinosh del giorno (mercTask già calcolato sopra)
+    if (mercTask) {
+      morningMsg.push(``, `🏪 *Task oggi — Mercatinosh:*`, `_${mercTask}_`);
+    }
+
     morningMsg.push(``, msg);
 
     await tg(env.TELEGRAM_TOKEN, morningMsg.join("\n"));
-    await kv.setState(env,{step:"morning_q1",lastDay:idx,context:{calSummary,ypct}});
+    await kv.setState(env,{step:"morning_q1",lastDay:idx,context:{calSummary,ypct,mercTask:mercTask||null}});
   } catch(e) { console.error("startMorning failed:", e.message); }
 }
 
@@ -1836,3 +1861,4 @@ export default {
     } catch(e) { console.error("scheduled error:", e.message); }
   },
 };
+
