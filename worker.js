@@ -1660,6 +1660,21 @@ async function processUpdate(body, env) {
 
     const flowSteps=["morning_q1","morning_q2","morning_q3","evening_q1","evening_q2","evening_q3"];
     if(flowSteps.includes(state.step)&&state.lastDay===realIdx){
+      // Intercetta richieste di reset durante il flow
+      const resetTriggers=/^(ricomincia|reset|riparti|sbagliato|annulla|daccapo|da capo|rifaccio|errore)/i;
+      if(resetTriggers.test(text.trim())){
+        const isEvening = state.step.startsWith("evening");
+        await env.KV.delete(`sfida60_conv_${realIdx}`);
+        await kv.setState(env,{step:"idle",lastDay:realIdx,context:{}});
+        const phase=getPhase(realIdx);
+        if(isEvening){
+          await startEvening(env);
+        } else {
+          await tg(env.TELEGRAM_TOKEN,`↩️ *Reset sessione mattutina G${realIdx+1}.*\nRicominciamo da capo.`,kb.main(pctOf((await kv.getData(env))[`day_${realIdx}`]||{})));
+          await startMorning(env);
+        }
+        return;
+      }
       if(state.step.startsWith("morning")) await handleMorningAnswer(env,state.step,text,realIdx);
       else await handleEveningAnswer(env,state.step,text,realIdx);
       return;
