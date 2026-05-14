@@ -1194,13 +1194,16 @@ async function handleEveningAnswer(env, step, answer, idx) {
       const all = await kv.getData(env);
       const phase = getPhase(idx);
       const vuln = detectActiveVulnerability(all, idx);
-      const ctx = `Oggi: ${state.context?.pct}% | Fase: ${phase.name} | Raggiunto: ${conv.evening.a1} | Deviazione: ${conv.evening.a2} | Domani: ${answer} | Settimana: ${weekAvg(all,idx)}% | Vulnerabilità: ${vuln?.name||"nessuna"}`;
+      // FIX 2026-05-14: ricalcola pct freschmente dai dati attuali invece di usare snapshot stale
+      // (lo snapshot in state.context.pct era preso quando Marco apriva la sessione alle 21:05,
+      // ma se l'utente checka items DOPO quel momento, il pct nel dossier risultava 0%)
+      const dayDataFresh = all[`day_${idx}`]||{};
+      const pct = pctOf(dayDataFresh);
+      const ctx = `Oggi: ${pct}% | Fase: ${phase.name} | Raggiunto: ${conv.evening.a1} | Deviazione: ${conv.evening.a2} | Domani: ${answer} | Settimana: ${weekAvg(all,idx)}% | Vulnerabilità: ${vuln?.name||"nessuna"}`;
       const analysis = await askGemini(env.GEMINI_API_KEY,marcoSystem(ctx),`Esame di coscienza. Dati alla mano. Fase ${phase.name}. Pattern se esiste. Confronta con previsione: ${phase.prediction}. Un'intenzione concreta per il Boot di domani. Max 130 parole.`,380);
 
       const predictiveNote = await askGemini(env.GEMINI_API_KEY,marcoSystem(),
-        `Nota predittiva per G${idx+2}: fase ${phase.name}, oggi ${state.context?.pct}%, vulnerabilità ${vuln?.name||"nessuna"}. Una riga: cosa Marco si aspetta domani.`, 80);
-
-      const pct = state.context?.pct||0;
+        `Nota predittiva per G${idx+2}: fase ${phase.name}, oggi ${pct}%, vulnerabilità ${vuln?.name||"nessuna"}. Una riga: cosa Marco si aspetta domani.`, 80);
       const {score} = calculateScore(all, idx);
 
       await tg(env.TELEGRAM_TOKEN,[
